@@ -1,3 +1,13 @@
 pyg_cpu_env/
+venv/
+env/
+.env/
+
+[Vv]env/
+[Ee]nv/
+
 __pycache__/
+*.py[cod]
+*$py.class
+
 .vscode/
