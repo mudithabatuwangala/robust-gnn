@@ -3,6 +3,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from torch_geometric.data import Data
 from torch_geometric.utils import to_networkx
+from torch_geometric.nn import GCNConv
 
 # 1. Define the connections (edges)
 # Node 0 -> 1, 1 -> 0, 1 -> 2, 2 -> 1 (nodes: 0, 1, 2)
@@ -18,10 +19,22 @@ data = Data(x=x, edge_index=edge_index)
 # Convert the PyG data object into NetworkX
 G = to_networkx(data, to_undirected=True) 
 
+# Initialize the layer
+# Imput features of graph = 1 (x has 1 col)
+# Output features = 2 (srbitrary)
+conv = GCNConv(in_channels=1, out_channels=2)
+
+# Pass the dat through the GCN layer
+# We need both features x and the structure (edge_index)
+output = conv(data.x, data.edge_index)
+
 print("--- PyTorch Geometric Success! ---")
 print(f"Graph summary: {data}")
 print(f"Number of nodes: {data.num_nodes}")
 print(f"Number of edges: {data.num_edges}")
+
+print("Output features after one GCN layer:")
+print(output)
 
 # Draw the graph G
 plt.figure(figsize=(4, 4))
