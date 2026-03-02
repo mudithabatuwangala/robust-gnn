@@ -16,3 +16,7 @@ print("--- PyTorch Geometric Success! ---")
 print(f"Graph summary: {data}")
 print(f"Number of nodes: {data.num_nodes}")
 print(f"Number of edges: {data.num_edges}")
+
+print(f"Number of edges: {data.num_edges}")
+# dhgfhgdghfhgdffhg
+
