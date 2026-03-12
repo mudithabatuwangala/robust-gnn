@@ -16,13 +16,29 @@ train_dataset, test_dataset = dataset[:3500], dataset[3500:]
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32)
 
+
+# Basic info
+print("Number of graphs (molecules):", len(dataset))
+print("Number of node features per atom:", dataset.num_node_features)
+print("Number of classes:", dataset.num_classes)
+
+data = dataset[0]
+
+print(data)
+print("Node feature shape:", data.x.shape)
+print("Edge index shape:", data.edge_index.shape)
+print("Label:", data.y)
+
+
 # 2. Visualize one molecule
 data = dataset[0]
+print(data.x)
 G = to_networkx(data, to_undirected=True)
 plt.figure(figsize=(4,4))
 nx.draw(G, node_size=50)
 plt.title("Example Molecule Graph")
 plt.show()
+
 
 # 3. Define compact GCN
 class GCN(torch.nn.Module):
