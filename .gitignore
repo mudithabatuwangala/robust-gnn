@@ -2,6 +2,7 @@ pyg_cpu_env/
 venv/
 env/
 .env/
+data/
 
 [Vv]env/
 [Ee]nv/
