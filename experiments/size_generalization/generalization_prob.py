@@ -22,6 +22,11 @@ def prepare_size_datasets():
     train_data = [small_graphs[i] for i in indices[:split]]
     test_small_data = [small_graphs[i] for i in indices[split:]]
     
+    print(f"Total Mutagenicity Dataset: {len(full_dataset)}")
+    print(f"Training on: {len(train_data)} Small Graphs (<25 nodes)")
+    print(f"Testing on: {len(test_small_data)} Small Graphs (Check)")
+    print(f"Testing on: {len(large_graphs)} Large Graphs (>40 nodes - STRESS TEST)")
+    
     return train_data, test_small_data, large_graphs, full_dataset.num_node_features, full_dataset.num_classes
 
 # --- 2. THE GCN MODEL ---
