@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GCNConv, global_max_pool
+from torch_geometric.nn import GCNConv, GATConv, global_max_pool
 import copy
 
 # 1. LOAD DATASET
@@ -26,11 +26,12 @@ print(f"Train size: {len(train_loader.dataset)}, Val size: {len(val_loader.datas
 class RobustGNN(torch.nn.Module):
     def __init__(self, hidden_channels):
         super(RobustGNN, self).__init__()
-        self.conv1 = GCNConv(dataset.num_node_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.conv4 = GCNConv(hidden_channels, hidden_channels)
-        self.conv5 = GCNConv(hidden_channels, hidden_channels)
+        torch.manual_seed(42)
+        self.conv1 = GATConv(dataset.num_node_features, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, hidden_channels)
+        self.conv3 = GATConv(hidden_channels, hidden_channels)
+        self.conv4 = GATConv(hidden_channels, hidden_channels)
+        self.conv5 = GATConv(hidden_channels, hidden_channels)
         self.lin = torch.nn.Linear(hidden_channels, dataset.num_classes)
 
     def forward(self, x, edge_index, batch):
