@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GCNConv, global_max_pool
+from torch_geometric.nn import GATConv, global_max_pool, global_mean_pool, global_add_pool
 import copy
 
 # 1. LOAD DATASET
@@ -24,13 +24,16 @@ print(f"Train size: {len(train_loader.dataset)}, Val size: {len(val_loader.datas
 
 # 3. DEFINE MODEL
 class RobustGNN(torch.nn.Module):
-    def __init__(self, hidden_channels):
+    def __init__(self, hidden_channels, pooling_type):
         super(RobustGNN, self).__init__()
-        self.conv1 = GCNConv(dataset.num_node_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.conv4 = GCNConv(hidden_channels, hidden_channels)
-        self.conv5 = GCNConv(hidden_channels, hidden_channels)
+        # Internal seed ensures weights start EXACTLY the same for MAX, MEAN, and SUM
+        torch.manual_seed(42)
+        self.pooling_type = pooling_type    
+        self.conv1 = GATConv(dataset.num_node_features, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, hidden_channels)
+        self.conv3 = GATConv(hidden_channels, hidden_channels)
+        self.conv4 = GATConv(hidden_channels, hidden_channels)
+        self.conv5 = GATConv(hidden_channels, hidden_channels)
         self.lin = torch.nn.Linear(hidden_channels, dataset.num_classes)
 
     def forward(self, x, edge_index, batch):
@@ -39,10 +42,20 @@ class RobustGNN(torch.nn.Module):
         x = self.conv3(x, edge_index).relu()
         x = self.conv4(x, edge_index).relu()
         x = self.conv5(x, edge_index).relu()
-        x = global_max_pool(x, batch)
-        return self.lin(x)
 
-model = RobustGNN(hidden_channels=128)
+        if self.pooling_type == 'max':
+            x = global_max_pool(x, batch)
+        elif self.pooling_type == 'mean':
+            x = global_mean_pool(x, batch)
+        else: # sum
+            x = global_add_pool(x, batch)
+            
+        return self.lin(x)
+    
+# CHOOSE YOUR TEST HERE: ['max', 'mean', 'sum']
+CURRENT_POOL = 'sum' 
+
+model = RobustGNN(hidden_channels=128, pooling_type=CURRENT_POOL)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 criterion = torch.nn.CrossEntropyLoss()
 
@@ -76,6 +89,7 @@ patience = 20
 trigger_times = 0
 
 print("Starting training Version 2...")
+print(f"Training with Pooling: {CURRENT_POOL.upper()}...")
 for epoch in range(1, 151):
     loss = train()
     val_acc = test(val_loader)
