@@ -1,0 +1,103 @@
+import torch
+import torch.nn.functional as F
+from torch_geometric.datasets import TUDataset
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import GCNConv, global_max_pool
+import copy
+
+# 1. LOAD DATASET
+dataset = TUDataset(root='/tmp/Mutagenicity', name='Mutagenicity').shuffle()
+
+# 2. SPLIT DATA (Your Logic)
+# Small/Medium graphs for learning
+train_val_data = [d for d in dataset if d.num_nodes <= 40]
+# Large graphs for the final "Robustness" test
+challenge_data = [d for d in dataset if d.num_nodes > 40]
+
+# Split train_val into 80% Train and 20% Val
+split = int(len(train_val_data) * 0.8)
+train_loader = DataLoader(train_val_data[:split], batch_size=64, shuffle=True)
+val_loader = DataLoader(train_val_data[split:], batch_size=64)
+challenge_loader = DataLoader(challenge_data, batch_size=64)
+
+print(f"Train size: {len(train_loader.dataset)}, Val size: {len(val_loader.dataset)}, Challenge size: {len(challenge_data)}")
+
+# 3. DEFINE MODEL
+class RobustGNN(torch.nn.Module):
+    def __init__(self, hidden_channels):
+        super(RobustGNN, self).__init__()
+        self.conv1 = GCNConv(dataset.num_node_features, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        self.conv4 = GCNConv(hidden_channels, hidden_channels)
+        self.conv5 = GCNConv(hidden_channels, hidden_channels)
+        self.lin = torch.nn.Linear(hidden_channels, dataset.num_classes)
+
+    def forward(self, x, edge_index, batch):
+        x = self.conv1(x, edge_index).relu()
+        x = self.conv2(x, edge_index).relu()
+        x = self.conv3(x, edge_index).relu()
+        x = self.conv4(x, edge_index).relu()
+        x = self.conv5(x, edge_index).relu()
+        x = global_max_pool(x, batch)
+        return self.lin(x)
+
+model = RobustGNN(hidden_channels=128)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+criterion = torch.nn.CrossEntropyLoss()
+
+# 4. TRAINING & EVALUATION FUNCTIONS
+def train():
+    model.train()
+    total_loss = 0
+    for data in train_loader:
+        optimizer.zero_grad()
+        out = model(data.x, data.edge_index, data.batch)
+        loss = criterion(out, data.y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * data.num_graphs
+    return total_loss / len(train_loader.dataset)
+
+@torch.no_grad()
+def test(loader):
+    model.eval()
+    correct = 0
+    for data in loader:
+        out = model(data.x, data.edge_index, data.batch)
+        pred = out.argmax(dim=1)
+        correct += int((pred == data.y).sum())
+    return correct / len(loader.dataset)
+
+# 5. TRAINING LOOP (Early Stopping on Val Acc)
+best_val_acc = 0
+best_model_state = None
+patience = 20
+trigger_times = 0
+
+print("Starting training Version 2...")
+for epoch in range(1, 151):
+    loss = train()
+    val_acc = test(val_loader)
+    
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        best_model_state = copy.deepcopy(model.state_dict()) 
+        trigger_times = 0
+    else:
+        trigger_times += 1
+    
+    if epoch % 10 == 0:
+        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}')
+    
+    if trigger_times >= patience:
+        print(f"Early stopping at epoch {epoch}")
+        break
+
+# 6. FINAL ROBUSTNESS TEST
+model.load_state_dict(best_model_state)
+challenge_acc = test(challenge_loader)
+
+print("-" * 30)
+print(f'Final Best Val Acc (Small/Med): {best_val_acc:.4f}')
+print(f'Final Challenge (Large Graphs) Acc: {challenge_acc:.4f}')
