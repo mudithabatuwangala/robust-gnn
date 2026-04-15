@@ -1,0 +1,183 @@
+import torch
+import torch.nn.functional as F
+from torch_geometric.datasets import TUDataset
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import GCNConv, global_max_pool, global_mean_pool, global_add_pool
+from sklearn.model_selection import train_test_split
+import numpy as np
+import copy
+import random
+
+# ==========================================
+# 1. THE "LOCKSMITH": GLOBAL SEED CONTROL
+# ==========================================
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # Critical for ensuring Version 3 results are reproducible on GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# Initial seed for data splitting
+set_seed(42)
+
+# ==========================================
+# 2. DATA PREPARATION (4-WAY STRATIFIED)
+# ==========================================
+dataset = TUDataset(root='/tmp/Mutagenicity', name='Mutagenicity')
+
+# Create the 4-way categories (S0, S1, L0, L1)
+categories = []
+for d in dataset:
+    size_tag = "L" if d.num_nodes > 40 else "S"
+    label_tag = str(d.y.item())
+    categories.append(size_tag + label_tag)
+
+indices = np.arange(len(dataset))
+# Split: 70% Train, 15% Val, 15% Test
+train_idx, temp_idx = train_test_split(
+    indices, test_size=0.3, stratify=categories, random_state=42
+)
+temp_cats = [categories[i] for i in temp_idx]
+val_idx, test_idx = train_test_split(
+    temp_idx, test_size=0.5, stratify=temp_cats, random_state=42
+)
+
+# Loaders (Note: Shuffle=True is seeded, so order is consistent across tests)
+train_loader = DataLoader(dataset[train_idx.tolist()], batch_size=64, shuffle=True)
+val_loader = DataLoader(dataset[val_idx.tolist()], batch_size=64)
+test_loader = DataLoader(dataset[test_idx.tolist()], batch_size=64)
+
+print(f"Data Split Success | Train: {len(train_loader.dataset)} | Val: {len(val_loader.dataset)} | Test: {len(test_loader.dataset)}")
+
+# ==========================================
+# 3. ARCHITECTURE (GCN-5 with Dynamic Pooling)
+# ==========================================
+class RobustGNN(torch.nn.Module):
+    def __init__(self, hidden_channels, pooling_type):
+        super(RobustGNN, self).__init__()
+        # Internal seed ensures weights start EXACTLY the same for MAX, MEAN, and SUM
+        torch.manual_seed(42)
+        self.pooling_type = pooling_type
+        
+        self.conv1 = GCNConv(dataset.num_node_features, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        self.conv4 = GCNConv(hidden_channels, hidden_channels)
+        self.conv5 = GCNConv(hidden_channels, hidden_channels)
+        self.lin = torch.nn.Linear(hidden_channels, dataset.num_classes)
+
+    def forward(self, x, edge_index, batch):
+        x = self.conv1(x, edge_index).relu()
+        x = self.conv2(x, edge_index).relu()
+        x = self.conv3(x, edge_index).relu()
+        x = self.conv4(x, edge_index).relu()
+        x = self.conv5(x, edge_index).relu()
+        
+        if self.pooling_type == 'max':
+            x = global_max_pool(x, batch)
+        elif self.pooling_type == 'mean':
+            x = global_mean_pool(x, batch)
+        else: # sum
+            x = global_add_pool(x, batch)
+            
+        return self.lin(x)
+
+# ==========================================
+# 4. TRAINING & EVALUATION FUNCTIONS
+# ==========================================
+def train_step(model, optimizer, criterion):
+    model.train()
+    total_loss = 0
+    for data in train_loader:
+        optimizer.zero_grad()
+        out = model(data.x, data.edge_index, data.batch)
+        loss = criterion(out, data.y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * data.num_graphs
+    return total_loss / len(train_loader.dataset)
+
+@torch.no_grad()
+def val_step(model, criterion):
+    model.eval()
+    val_loss = 0
+    for data in val_loader:
+        out = model(data.x, data.edge_index, data.batch)
+        val_loss += criterion(out, data.y).item() * data.num_graphs
+    return val_loss / len(val_loader.dataset)
+
+@torch.no_grad()
+def final_test(model):
+    model.eval()
+    s_correct, s_total = 0, 0
+    l_correct, l_total = 0, 0
+    for data in test_loader:
+        out = model(data.x, data.edge_index, data.batch)
+        pred = out.argmax(dim=1)
+        for i in range(len(data.y)):
+            nodes = (data.batch == i).sum().item()
+            correct = (pred[i] == data.y[i]).item()
+            if nodes <= 40:
+                s_correct += correct
+                s_total += 1
+            else:
+                l_correct += correct
+                l_total += 1
+    return s_correct/s_total, l_correct/l_total
+
+# ==========================================
+# 5. THE EXPERIMENT LOOP (Resetting Seed Every Time)
+# ==========================================
+methods = ['max', 'mean', 'sum']
+final_results = {}
+
+for p_type in methods:
+    print(f"\n>>> TESTING {p_type.upper()} POOLING (Seed Resetting)...")
+    
+    # RE-SEEDING: This makes each test start from the exact same world-state
+    set_seed(42)
+    
+    model = RobustGNN(hidden_channels=128, pooling_type=p_type)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+    
+    best_val_loss = float('inf')
+    best_model_state = None
+    patience = 20
+    trigger_times = 0
+    
+    for epoch in range(1, 151):
+        t_loss = train_step(model, optimizer, criterion)
+        v_loss = val_step(model, criterion)
+        
+        if v_loss < best_val_loss:
+            best_val_loss = v_loss
+            best_model_state = copy.deepcopy(model.state_dict())
+            trigger_times = 0
+        else:
+            trigger_times += 1
+            
+        if epoch % 20 == 0:
+            print(f"Epoch {epoch:03d} | Val Loss: {v_loss:.4f}")
+            
+        if trigger_times >= patience:
+            print(f"Early Stopping at Epoch {epoch}")
+            break
+            
+    # Load best state and evaluate
+    model.load_state_dict(best_model_state)
+    small_acc, large_acc = final_test(model)
+    final_results[p_type] = {"Small": small_acc, "Large": large_acc, "Loss": best_val_loss}
+
+# ==========================================
+# 6. FINAL COMPARATIVE TABLE
+# ==========================================
+print("\n" + "="*55)
+print(f"{'POOLLING METHOD':<15} | {'SMALL ACC':<10} | {'LARGE ACC':<10} | {'BEST LOSS':<10}")
+print("-" * 55)
+for m, r in final_results.items():
+    print(f"{m.upper():<15} | {r['Small']:<10.4f} | {r['Large']:<10.4f} | {r['Loss']:<10.4f}")
