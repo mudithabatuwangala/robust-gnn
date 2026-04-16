@@ -83,7 +83,7 @@ def run_test():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # UPDATE THIS PATH TO YOUR NEW MODEL
-    model_path = "step3_trained_model.pt"
+    model_path = "experiments\self_made_dataset\step3_trained_model.pt"
     
     if not os.path.exists(model_path):
         print(f"Error: {model_path} nahi mila!")
