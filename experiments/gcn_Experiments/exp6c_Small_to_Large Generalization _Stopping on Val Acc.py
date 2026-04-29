@@ -4,25 +4,12 @@ from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_max_pool
 import copy
+import numpy as np
 
 # 1. LOAD DATASET
 dataset = TUDataset(root='/tmp/Mutagenicity', name='Mutagenicity').shuffle()
 
-# 2. SPLIT DATA (Your Logic)
-# Small/Medium graphs for learning
-train_val_data = [d for d in dataset if d.num_nodes <= 40]
-# Large graphs for the final "Robustness" test
-challenge_data = [d for d in dataset if d.num_nodes > 40]
-
-# Split train_val into 80% Train and 20% Val
-split = int(len(train_val_data) * 0.8)
-train_loader = DataLoader(train_val_data[:split], batch_size=64, shuffle=True)
-val_loader = DataLoader(train_val_data[split:], batch_size=64)
-challenge_loader = DataLoader(challenge_data, batch_size=64)
-
-print(f"Train size: {len(train_loader.dataset)}, Val size: {len(val_loader.dataset)}, Challenge size: {len(challenge_data)}")
-
-# 3. DEFINE MODEL
+# 2. DEFINE MODEL
 class RobustGNN(torch.nn.Module):
     def __init__(self, hidden_channels):
         super(RobustGNN, self).__init__()
@@ -42,25 +29,7 @@ class RobustGNN(torch.nn.Module):
         x = global_max_pool(x, batch)
         return self.lin(x)
 
-model = RobustGNN(hidden_channels=128)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-criterion = torch.nn.CrossEntropyLoss()
-
-# 4. TRAINING & EVALUATION FUNCTIONS
-def train():
-    model.train()
-    total_loss = 0
-    for data in train_loader:
-        optimizer.zero_grad()
-        out = model(data.x, data.edge_index, data.batch)
-        loss = criterion(out, data.y)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * data.num_graphs
-    return total_loss / len(train_loader.dataset)
-
-@torch.no_grad()
-def test(loader):
+def test(model, loader):
     model.eval()
     correct = 0
     for data in loader:
@@ -69,35 +38,69 @@ def test(loader):
         correct += int((pred == data.y).sum())
     return correct / len(loader.dataset)
 
-# 5. TRAINING LOOP (Early Stopping on Val Acc)
-best_val_acc = 0
-best_model_state = None
-patience = 20
-trigger_times = 0
+# --- RUN CONFIGURATION ---
+num_runs = 5
+all_val_small = []
+all_val_large = []
 
-print("Starting training Version 2...")
-for epoch in range(1, 151):
-    loss = train()
-    val_acc = test(val_loader)
-    
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        best_model_state = copy.deepcopy(model.state_dict()) 
-        trigger_times = 0
-    else:
-        trigger_times += 1
-    
-    if epoch % 10 == 0:
-        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val Acc: {val_acc:.4f}')
-    
-    if trigger_times >= patience:
-        print(f"Early stopping at epoch {epoch}")
-        break
+print(f"Starting {num_runs} independent runs...")
 
-# 6. FINAL ROBUSTNESS TEST
-model.load_state_dict(best_model_state)
-challenge_acc = test(challenge_loader)
+for run in range(num_runs):
+    # Re-shuffle and Re-split every run for better averaging
+    dataset = dataset.shuffle()
+    
+    # Split by size
+    small_data = [d for d in dataset if d.num_nodes <= 40]
+    large_data = [d for d in dataset if d.num_nodes > 40]
 
-print("-" * 30)
-print(f'Final Best Val Acc (Small/Med): {best_val_acc:.4f}')
-print(f'Final Challenge (Large Graphs) Acc: {challenge_acc:.4f}')
+    # Split small_data into Train (80%) and Val_Small (20%)
+    split = int(len(small_data) * 0.8)
+    train_loader = DataLoader(small_data[:split], batch_size=64, shuffle=True)
+    val_small_loader = DataLoader(small_data[split:], batch_size=64)
+    val_large_loader = DataLoader(large_data, batch_size=64)
+
+    model = RobustGNN(hidden_channels=128)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    best_val_small_acc = 0
+    best_at_large_acc = 0
+    patience = 20
+    trigger_times = 0
+
+    for epoch in range(1, 151):
+        # Training
+        model.train()
+        for data in train_loader:
+            optimizer.zero_grad()
+            out = model(data.x, data.edge_index, data.batch)
+            loss = criterion(out, data.y)
+            loss.backward()
+            optimizer.step()
+        
+        # Validation
+        current_val_small = test(model, val_small_loader)
+        
+        if current_val_small > best_val_small_acc:
+            best_val_small_acc = current_val_small
+            # Check how we are doing on large graphs at our "best" small-graph checkpoint
+            best_at_large_acc = test(model, val_large_loader)
+            trigger_times = 0
+        else:
+            trigger_times += 1
+        
+        if trigger_times >= patience:
+            break
+
+    all_val_small.append(best_val_small_acc)
+    all_val_large.append(best_at_large_acc)
+    print(f"Run {run+1}: Small Acc = {best_val_small_acc:.4f}, Large Acc = {best_at_large_acc:.4f}")
+
+# 3. FINAL AVERAGED RESULTS
+print("\n" + "="*40)
+print("FINAL AVERAGED RESULTS (5 ITERATIONS)")
+print("="*40)
+print(f"Validation (Small Graphs <= 40 nodes): {np.mean(all_val_small):.4f} ± {np.std(all_val_small):.4f}")
+print(f"Validation (Large Graphs > 40 nodes):  {np.mean(all_val_large):.4f} ± {np.std(all_val_large):.4f}")
+print(f"Generalization Gap: {abs(np.mean(all_val_small) - np.mean(all_val_large)):.4f}")
+print("="*40)
