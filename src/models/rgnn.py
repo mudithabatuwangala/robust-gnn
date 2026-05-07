@@ -4,6 +4,8 @@ from torch_geometric.nn import GATConv, GCNConv, global_max_pool, global_mean_po
 
 ACTIVATIONS = {
     "relu": F.relu,
+    "elu": F.elu,
+    "leaky_relu": F.leaky_relu,
 }
 
 POOLING = {
