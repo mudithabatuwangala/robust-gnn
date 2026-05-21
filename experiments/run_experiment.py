@@ -6,7 +6,7 @@ from src.datasets.dataset_loader import load_dataset
 from src.datasets.splitters import split_by_num_nodes
 from src.models.rgnn import Rgnn
 from src.training.trainer import train
-from src.evaluation.evaluate import evaluate
+from src.evaluation.evaluate import evaluate, evaluate_metrics
 
 
 def run(config):
@@ -36,6 +36,7 @@ def run(config):
         pooling=config["pooling"],
         activation=config["activation"],
         num_layers=config["num_layers"],
+        seeds=config["seeds"],
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
@@ -84,15 +85,41 @@ def run(config):
     # 5. FINAL TEST
     model.load_state_dict(best_model)
     challenge_acc = evaluate(model, challenge_loader)
+    precision, recall, f1 = evaluate_metrics(model, challenge_loader)
 
     print("-" * 30)
     print(f'Final Best Val Acc: {best_val_acc:.4f}')
     print(f'Challenge Acc (Large Graphs): {challenge_acc:.4f}')
     print(f'Minimum Training Loss: {min_loss:.4f}')
     print(f'Early Stopping Epoch: {early_stop_epoch}')
+    print(f'Precision: {precision:.4f}')
+    print(f'Recall: {recall:.4f}')
+    print(f'F1 Score: {f1:.4f}')
 
     return {
         "best_val_acc": best_val_acc,
         "challenge_acc": challenge_acc,
         "min_loss": min_loss,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
     }
+
+#     return {
+#     "experiment_type": config["experiment_type"],
+
+#     # shared metrics
+#     "best_val_acc": best_val_acc,
+#     "challenge_acc": challenge_acc,
+#     "min_loss": min_loss,
+
+#     # identifiers (IMPORTANT FOR CSV SPLIT)
+#     "dataset": config["dataset_name"],
+#     "model": config["model_type"],
+#     "activation": config["activation"],
+#     "pooling": config["pooling"],
+
+#     "hidden_channels": config["hidden_channels"],
+#     "num_layers": config["num_layers"],
+#     "seeds": config["seeds"],
+# }

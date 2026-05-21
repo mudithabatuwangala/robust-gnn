@@ -137,6 +137,7 @@ from src.runner.experiment_runner import execute
 from src.utils.result_collector import collect_results
 from src.utils.summary_table import build_table
 from src.utils.advanced_plotting import plot_dataset_results
+from src.utils.save_results import save_or_update_results
 
 
 def load_yaml(path):
@@ -202,24 +203,34 @@ if __name__ == "__main__":
         print(f"\n===== Experiment {i+1}/{len(configs)} =====")
         print(cfg)
 
-        run_results = run_multiple_times(execute, cfg, num_runs=1)
+        run_results = run_multiple_times(execute, cfg, num_runs=5)
 
         # store all runs with config
         for r in run_results:
             all_runs.append((cfg, r))
 
+    # print("all_runs:")
+    # print(all_runs)
+
     # -------------------------
     # GROUP RESULTS
     # -------------------------
-    grouped = collect_results(all_runs)
+    grouped = collect_results(all_runs, cfg["experiment_type"])
+    # print("grouped:")
+    # print(grouped)
 
     # -------------------------
     # SAVE TABLE
     # -------------------------
-    df = build_table(grouped)
-    df.to_csv("results/summary_table.csv", index=False)
+    df = build_table(grouped, cfg["experiment_type"])
+    # print("df:")
+    # print(df)
+    path = "results/" + str(cfg["experiment_type"]) + "_experiment.csv"
+    # save_or_update_results(df, "results/summary_table.csv")
+    save_or_update_results(df, path)
+    # save_or_update_results(df)
 
-    print("\nSaved summary table to results/summary_table.csv")
+    print("\nSaved summary table to " + path)
 
     # # -------------------------
     # # PLOT PER DATASET
@@ -227,3 +238,49 @@ if __name__ == "__main__":
     # for dataset_name in grouped:
     #     print(f"\nGenerating plot for dataset: {dataset_name}")
     #     plot_dataset_results(dataset_name, grouped[dataset_name])
+
+
+#     # -------------------------
+# # GROUP RESULTS
+# # -------------------------
+# grouped = collect_results(all_runs)
+
+# # -------------------------
+# # SPLIT EXPERIMENTS
+# # -------------------------
+# generalization_runs = []
+# baseline_runs = []
+
+# for cfg, result in all_runs:
+
+#     exp_type = cfg.get("experiment_type", "generalization")
+
+#     if exp_type == "baseline":
+#         baseline_runs.append((cfg, result))
+#     else:
+#         generalization_runs.append((cfg, result))
+
+# # -------------------------
+# # GENERALIZATION PIPELINE
+# # -------------------------
+# from src.utils.result_collector import collect_results
+# from src.utils.summary_table import build_table
+# from src.utils.save_results import save_or_update_results
+
+# gen_grouped = collect_results(generalization_runs)
+# gen_df = build_table(gen_grouped)
+# save_or_update_results(gen_df, "results/generalization.csv")
+
+# print("\nSaved generalization results -> results/generalization.csv")
+
+
+# # -------------------------
+# # BASELINE PIPELINE
+# # -------------------------
+# from src.utils.baseline_table import build_baseline_table
+# from src.utils.save_results import save_or_update_results
+
+# base_df = build_baseline_table(baseline_runs)
+# save_or_update_results(base_df, "results/baseline.csv")
+
+# print("\nSaved baseline results -> results/baseline.csv")

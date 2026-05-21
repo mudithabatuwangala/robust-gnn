@@ -1,0 +1,5 @@
+experiment_type: baseline
+# variables in baseline experiment
+hidden_channels: [32, 64, 128] # [32, 64, 128]
+num_layers: [4, 5, 6] # [4, 5, 6] except output layer (input + hidden)
+seeds: [13, 42, 123] # [13, 42, 123]
