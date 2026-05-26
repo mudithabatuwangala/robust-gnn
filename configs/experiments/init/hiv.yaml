@@ -1,0 +1,17 @@
+experiment_type: generalization
+dataset_name: HIV
+root: data/HIV
+model_type: [gin, gcn, gat]
+activation: [relu, elu, leaky_relu]
+pooling: [mean, max, sum]
+size_threshold: 40
+train_ratio: 0.8
+
+# experiment_type: generalization
+# dataset_name: HIV
+# root: data/HIV
+# model_type: [gin, gcn]
+# activation: relu
+# pooling: mean
+# size_threshold: 40
+# train_ratio: 0.8

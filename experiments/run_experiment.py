@@ -23,6 +23,9 @@ def run(config):
 
     # 2. SPLIT
     train_small_test_, large_test_data = split_by_num_nodes(dataset, config["size_threshold"])
+    if config["dataset_name"] == "hiv":
+        train_small_test_ = train_small_test_[:10000]
+        large_test_data = large_test_data[:6000]
 
     tst_split_idx = int(len(train_small_test_) * config["train_ratio"])
     train_val_ = train_small_test_[:tst_split_idx]
@@ -46,9 +49,11 @@ def run(config):
 
     # 3. MODEL
     model = Rgnn(
-        in_channels=dataset.num_node_features,
+        # in_channels=dataset.num_node_features,
+        in_channels=dataset[0].num_node_features if config["dataset_name"] == "hiv" else dataset.num_node_features,
         hidden_channels=config["hidden_channels"],
-        num_classes=dataset.num_classes,
+        # num_classes=dataset.num_classes,
+        num_classes=2,
         model_type=config["model_type"],
         pooling=config["pooling"],
         activation=config["activation"],
