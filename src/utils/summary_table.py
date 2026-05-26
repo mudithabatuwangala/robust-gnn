@@ -79,12 +79,16 @@ def build_table(grouped, exp_type):
                             "activation": act,
 
                             "best_val_acc": round(sum(r["best_val_acc"] for r in runs) / len(runs), 4),
-                            "challenge_acc": round(sum(r["challenge_acc"] for r in runs) / len(runs), 4),
+                            "small_acc": round(sum(r["small_acc"] for r in runs) / len(runs), 4),
+                            "large_acc": round(sum(r["large_acc"] for r in runs) / len(runs), 4),
                             "min_loss": round(sum(r["min_loss"] for r in runs) / len(runs), 4),
                             # "early_stop_epoch": round(sum(r["early_stop_epoch"] for r in runs) / len(runs), 4),
-                            "precision": round(sum(r["precision"] for r in runs) / len(runs), 4),
-                            "recall": round(sum(r["recall"] for r in runs) / len(runs), 4),
-                            "f1_score": round(sum(r["f1_score"] for r in runs) / len(runs), 4),
+                            "small_precision": round(sum(r["small_precision"] for r in runs) / len(runs), 4),
+                            "small_recall": round(sum(r["small_recall"] for r in runs) / len(runs), 4),
+                            "small_f1_score": round(sum(r["small_f1_score"] for r in runs) / len(runs), 4),
+                            "large_precision": round(sum(r["large_precision"] for r in runs) / len(runs), 4),
+                            "large_recall": round(sum(r["large_recall"] for r in runs) / len(runs), 4),
+                            "large_f1_score": round(sum(r["large_f1_score"] for r in runs) / len(runs), 4),
                         })
     else:
         for seeds in grouped:
@@ -97,11 +101,15 @@ def build_table(grouped, exp_type):
                         "num_channels": num_channels,
 
                         "best_val_acc": round(sum(r["best_val_acc"] for r in runs) / len(runs), 4),
-                        "challenge_acc": round(sum(r["challenge_acc"] for r in runs) / len(runs), 4),
+                        "small_acc": round(sum(r["small_acc"] for r in runs) / len(runs), 4),
+                        "large_acc": round(sum(r["large_acc"] for r in runs) / len(runs), 4),
                         "min_loss": round(sum(r["min_loss"] for r in runs) / len(runs), 4),
                         # "early_stop_epoch": round(sum(r["early_stop_epoch"] for r in runs) / len(runs), 4),
-                        "precision": round(sum(r["precision"] for r in runs) / len(runs), 4),
-                        "recall": round(sum(r["recall"] for r in runs) / len(runs), 4),
-                        "f1_score": round(sum(r["f1_score"] for r in runs) / len(runs), 4),
+                        "small_precision": round(sum(r["small_precision"] for r in runs) / len(runs), 4),
+                        "small_recall": round(sum(r["small_recall"] for r in runs) / len(runs), 4),
+                        "small_f1_score": round(sum(r["small_f1_score"] for r in runs) / len(runs), 4),
+                        "large_precision": round(sum(r["large_precision"] for r in runs) / len(runs), 4),
+                        "large_recall": round(sum(r["large_recall"] for r in runs) / len(runs), 4),
+                        "large_f1_score": round(sum(r["large_f1_score"] for r in runs) / len(runs), 4),
                     })
     return pd.DataFrame(rows)
