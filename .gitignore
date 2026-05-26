@@ -15,3 +15,5 @@ __pycache__/
 .vscode/
 
 just.py
+experiments/robustness_methods/synthetic_step2_complex_generator.py
+results/
