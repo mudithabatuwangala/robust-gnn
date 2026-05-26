@@ -1,0 +1,20 @@
+# Global Hyperparameters
+epochs: 150 # 150
+patience: 20
+lr: 0.001
+batch_size: 64
+dropout: 0.5
+
+# constants in baseline experimen
+dataset_name: Mutagenicity
+root: /tmp/Mutagenicity
+model_type: gcn
+activation: relu
+pooling: mean
+size_threshold: 40
+train_ratio: 0.8
+
+# constants in generalization experiment
+hidden_channels: 128
+num_layers: 5 # except output layer (input + hidden)
+seeds: 42
