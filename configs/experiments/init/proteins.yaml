@@ -1,0 +1,8 @@
+experiment_type: generalization
+dataset_name: PROTEINS
+root: /tmp/PROTEINS
+model_type: [gin, gcn, gat]
+activation: [relu, elu, leaky_relu]
+pooling: [mean, max, sum]
+size_threshold: 40
+train_ratio: 0.8

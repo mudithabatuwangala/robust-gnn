@@ -1,22 +1,3 @@
-# def train(model, loader, optimizer, criterion):
-#     # model = Rgnn(hidden_channels=128)
-#     # optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-#     # criterion = torch.nn.CrossEntropyLoss()
-#     model.train()
-#     total_loss = 0
-
-#     for data in loader:
-#         optimizer.zero_grad()
-#         out = model(data.x, data.edge_index, data.batch)
-#         loss = criterion(out, data.y)
-#         loss.backward()
-#         optimizer.step()
-
-#         total_loss += loss.item() * data.num_graphs
-
-#     return total_loss / len(loader.dataset)
-
-
 import torch
 
 def train(model, loader, optimizer, criterion):
@@ -25,28 +6,17 @@ def train(model, loader, optimizer, criterion):
     total_loss = 0
 
     for data in loader:
-
         optimizer.zero_grad()
-
         out = model(data.x, data.edge_index, data.batch)
-
-        # ---------------------------
-        # STANDARDIZED LABEL HANDLING
-        # ---------------------------
+        # Label handling
         y = data.y
-
-        # ensure correct shape for classification
+        # correct shape for classification
         if y.dim() > 1:
             y = y.view(-1)
-
         # CrossEntropy expects long
         y = y.long()
-
         loss = criterion(out, y)
-
         loss.backward()
         optimizer.step()
-
         total_loss += loss.item() * data.num_graphs
-
     return total_loss / len(loader.dataset)
