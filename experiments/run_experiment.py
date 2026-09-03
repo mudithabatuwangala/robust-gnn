@@ -11,18 +11,12 @@ from src.evaluation.evaluate import evaluate
 
 def run(config):
 
-    # 1. LOAD DATASET
     dataset = load_dataset(config["dataset_name"], config["root"])
-
-    # # 2. SPLIT
-    # train_val_, large_test_data = split_by_num_nodes(dataset, config["size_threshold"])
-
-    # split_idx = int(len(train_val_) * config["train_ratio"])
-    # train_data = train_val_[:split_idx]
-    # val_data = train_val_[split_idx:]
-
-    # 2. SPLIT
+    # Split
     train_small_test_, large_test_data = split_by_num_nodes(dataset, config["size_threshold"])
+    if config["dataset_name"] == "hiv":
+        train_small_test_ = train_small_test_[:10000]
+        large_test_data = large_test_data[:6000]
 
     tst_split_idx = int(len(train_small_test_) * config["train_ratio"])
     train_val_ = train_small_test_[:tst_split_idx]
@@ -44,9 +38,8 @@ def run(config):
 
     print(f"Train size: {len(train_data)}, Val size: {len(val_data)}, Small Test size: {len(small_test_data)}, Large Test size: {len(large_test_data)}")
 
-    # 3. MODEL
     model = Rgnn(
-        in_channels=dataset.num_node_features,
+        in_channels=dataset[0].num_node_features if config["dataset_name"] == "hiv" else dataset.num_node_features,
         hidden_channels=config["hidden_channels"],
         num_classes=dataset.num_classes,
         model_type=config["model_type"],
@@ -59,12 +52,12 @@ def run(config):
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
     criterion = torch.nn.CrossEntropyLoss()
 
-    # 4. TRAIN LOOP
+    # Train loop
     best_val_acc = 0
     best_model = None
     trigger_times = 0
 
-    # NEW: tracking variables
+    # Tracking variables
     min_loss = float("inf")
     early_stop_epoch = config["epochs"]  # default if no early stop
 
@@ -99,11 +92,10 @@ def run(config):
     if trigger_times < config["patience"]:
         early_stop_epoch = epoch
 
-    # 5. FINAL TEST
+    # Test
     model.load_state_dict(best_model)
     large_acc, large_precision, large_recall, large_f1 = evaluate(model, large_test_loader)
     small_acc, small_precision, small_recall, small_f1 = evaluate(model, small_test_loader)
-    # precision, recall, f1 = evaluate_metrics(model, challenge_loader)
 
     print("-" * 30)
     print(f'Final Best Val Acc: {best_val_acc:.4f}')
@@ -130,22 +122,3 @@ def run(config):
         "large_recall": large_recall,
         "large_f1_score": large_f1,
     }
-
-#     return {
-#     "experiment_type": config["experiment_type"],
-
-#     # shared metrics
-#     "best_val_acc": best_val_acc,
-#     "challenge_acc": challenge_acc,
-#     "min_loss": min_loss,
-
-#     # identifiers (IMPORTANT FOR CSV SPLIT)
-#     "dataset": config["dataset_name"],
-#     "model": config["model_type"],
-#     "activation": config["activation"],
-#     "pooling": config["pooling"],
-
-#     "hidden_channels": config["hidden_channels"],
-#     "num_layers": config["num_layers"],
-#     "seeds": config["seeds"],
-# }
