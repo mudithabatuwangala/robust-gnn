@@ -1,245 +1,523 @@
 import torch
-from torch_geometric.datasets import MoleculeNet
-from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GCNConv, global_max_pool
+import torch.nn.functional as F
 import copy
 import random
+from torch_geometric.datasets import MoleculeNet
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import (
+    GCNConv,
+    global_mean_pool,
+    global_max_pool,
+    global_add_pool
+)
 
-# =========================
-# CONFIG
-# =========================
+# Config
 TASK_IDX = 10
 NUM_RUNS = 5
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# =========================
-# LOAD DATASET
-# =========================
-dataset = MoleculeNet(root='/tmp/Tox21', name='Tox21')
+device = torch.device(
+    'cuda' if torch.cuda.is_available() else 'cpu'
+)
+dataset = MoleculeNet(
+    root='/tmp/Tox21',
+    name='Tox21'
+)
 
-# =========================
-# FILTER DATA
-# =========================
+# Filter data
 filtered_dataset = []
+
 for data in dataset:
     y = data.y[:, TASK_IDX]
-
+    # Remove missing labels
     if not torch.isnan(y):
+        # Binary label
         data.y = y.long()
+        # Convert node features to float
         data.x = data.x.float()
         filtered_dataset.append(data)
 
 print(f"Filtered dataset size: {len(filtered_dataset)}")
 
-# =========================
-# MODEL
-# =========================
-class RobustGNN(torch.nn.Module):
-    def __init__(self, hidden_channels):
-        super().__init__()
-        self.conv1 = GCNConv(dataset.num_node_features, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, hidden_channels)
-        self.conv4 = GCNConv(hidden_channels, hidden_channels)
-        self.conv5 = GCNConv(hidden_channels, hidden_channels)
-        self.lin = torch.nn.Linear(hidden_channels, 1)
+def apply_activation(x, activation):
+    if activation == "relu":
+        return F.relu(x)
+    elif activation == "elu":
+        return F.elu(x)
+    elif activation == "leaky_relu":
+        return F.leaky_relu(x)
 
-    def forward(self, x, edge_index, batch):
-        x = self.conv1(x, edge_index).relu()
-        x = self.conv2(x, edge_index).relu()
-        x = self.conv3(x, edge_index).relu()
-        x = self.conv4(x, edge_index).relu()
-        x = self.conv5(x, edge_index).relu()
-        x = global_max_pool(x, batch)
+class RobustGNN(torch.nn.Module):
+    def __init__(
+        self,
+        hidden_channels,
+        pooling,
+        activation
+    ):
+        super().__init__()
+        self.pooling = pooling
+        self.activation = activation
+        self.conv1 = GCNConv(
+            dataset.num_node_features,
+            hidden_channels
+        )
+        self.conv2 = GCNConv(
+            hidden_channels,
+            hidden_channels
+        )
+        self.conv3 = GCNConv(
+            hidden_channels,
+            hidden_channels
+        )
+        self.conv4 = GCNConv(
+            hidden_channels,
+            hidden_channels
+        )
+        self.conv5 = GCNConv(
+            hidden_channels,
+            hidden_channels
+        )
+        self.lin = torch.nn.Linear(
+            hidden_channels,
+            1
+        )
+
+    def forward(
+        self,
+        x,
+        edge_index,
+        batch
+    ):
+
+        x = apply_activation(
+            self.conv1(x, edge_index),
+            self.activation
+        )
+
+        x = apply_activation(
+            self.conv2(x, edge_index),
+            self.activation
+        )
+
+        x = apply_activation(
+            self.conv3(x, edge_index),
+            self.activation
+        )
+
+        x = apply_activation(
+            self.conv4(x, edge_index),
+            self.activation
+        )
+
+        x = apply_activation(
+            self.conv5(x, edge_index),
+            self.activation
+        )
+
+        if self.pooling == "mean":
+            x = global_mean_pool(x, batch)
+        elif self.pooling == "max":
+            x = global_max_pool(x, batch)
+        elif self.pooling == "sum":
+            x = global_add_pool(x, batch)
         return self.lin(x).view(-1)
 
-# =========================
-# TRAIN FUNCTION
-# =========================
-def train(model, loader, optimizer, criterion):
+def train(
+    model,
+    loader,
+    optimizer,
+    criterion
+):
+
     model.train()
     total_loss = 0
 
     for data in loader:
         data = data.to(device)
-
         optimizer.zero_grad()
-        out = model(data.x, data.edge_index, data.batch)
-        loss = criterion(out, data.y.float())
-
+        out = model(
+            data.x,
+            data.edge_index,
+            data.batch
+        )
+        loss = criterion(
+            out,
+            data.y.float()
+        )
         loss.backward()
         optimizer.step()
-
-        total_loss += loss.item() * data.num_graphs
+        total_loss += (
+            loss.item() * data.num_graphs
+        )
 
     return total_loss / len(loader.dataset)
 
-# =========================
-# TEST FUNCTION
-# =========================
 @torch.no_grad()
-def test(model, loader):
+def evaluate(model, loader):
+
     model.eval()
     correct = 0
     total = 0
+    TP = 0
+    FP = 0
+    FN = 0
 
     for data in loader:
         data = data.to(device)
 
-        out = model(data.x, data.edge_index, data.batch)
-        pred = (torch.sigmoid(out) > 0.5).long()
+        out = model(
+            data.x,
+            data.edge_index,
+            data.batch
+        )
+        pred = (
+            torch.sigmoid(out) > 0.5
+        ).long()
 
-        correct += int((pred == data.y).sum())
-        total += data.y.size(0)
+        labels = data.y.long()
 
-    return correct / total if total > 0 else 0
+        correct += int(
+            (pred == labels).sum()
+        )
 
-# =========================
-# COUNT CLASSES FUNCTION
-# =========================
-def count_classes(data_list):
-    toxic = 0
-    non_toxic = 0
+        total += labels.size(0)
 
-    for d in data_list:
-        if int(d.y.item()) == 1:
-            toxic += 1
-        else:
-            non_toxic += 1
+        TP += int(
+            ((pred == 1) & (labels == 1)).sum()
+        )
+        FP += int(
+            ((pred == 1) & (labels == 0)).sum()
+        )
+        FN += int(
+            ((pred == 0) & (labels == 1)).sum()
+        )
 
-    return toxic, non_toxic
+    acc = correct / total if total > 0 else 0
 
-# =========================
-# EXPERIMENT LOOP
-# =========================
-small_accs = []
-large_accs = []
+    precision = (
+        TP / (TP + FP)
+        if (TP + FP) > 0 else 0
+    )
 
-train_sizes = []
-val_sizes = []
-test_sizes = []
+    recall = (
+        TP / (TP + FN)
+        if (TP + FN) > 0 else 0
+    )
 
-for run in range(NUM_RUNS):
-    print(f"\n===== RUN {run+1} =====")
+    if (precision + recall) > 0:
 
-    # -------- Split by size --------
-    small_graphs = [d for d in filtered_dataset if d.num_nodes <= 40]
-    large_graphs = [d for d in filtered_dataset if d.num_nodes > 40]
+        f1 = (
+            2 * precision * recall
+            / (precision + recall)
+        )
 
-    random.shuffle(small_graphs)
-    random.shuffle(large_graphs)
+    else:
+        f1 = 0
 
-    # -------- SMALL: 60 / 20 / 20 --------
-    n_small = len(small_graphs)
+    return acc, precision, recall, f1
 
-    train_small = small_graphs[:int(0.6 * n_small)]
-    val_small   = small_graphs[int(0.6 * n_small):int(0.8 * n_small)]
-    test_small  = small_graphs[int(0.8 * n_small):]
+# Ssettings
+poolings = [
+    "mean",
+    "max",
+    "sum"
+]
 
-    # -------- LARGE: 0 / 20 / 80 --------
-    n_large = len(large_graphs)
+activations = [
+    "relu",
+    "elu",
+    "leaky_relu"
+]
 
-    val_large  = large_graphs[:int(0.2 * n_large)]
-    test_large = large_graphs[int(0.2 * n_large):]
+results = []
 
-    val_data = val_small + val_large
-    test_all = test_small + test_large
+for pooling in poolings:
 
-    # -------- PRINT SPLITS --------
-    print("\n--- Data Split ---")
-    print(f"Train (Small): {len(train_small)}")
+    for activation in activations:
+        print("\n===================================")
+        print(f"Pooling: {pooling}")
+        print(f"Activation: {activation}")
+        print("===================================")
 
-    print(f"Validation (Small): {len(val_small)}")
-    print(f"Validation (Large): {len(val_large)}")
-    print(f"Total Validation: {len(val_small) + len(val_large)}")
+        run_val_accs = []
+        run_large_accs = []
+        run_losses = []
 
-    print(f"Test (Small): {len(test_small)}")
-    print(f"Test (Large): {len(test_large)}")
-    print(f"Total Test: {len(test_small) + len(test_large)}")
+        run_precisions = []
+        run_recalls = []
+        run_f1s = []
 
-    # -------- CLASS DISTRIBUTION --------
-    toxic, non_toxic = count_classes(test_all)
+        for run in range(NUM_RUNS):
 
-    print("\n--- Test Set Class Distribution ---")
-    print(f"Toxic (1): {toxic}")
-    print(f"Non-Toxic (0): {non_toxic}")
-    print(f"Total: {toxic + non_toxic}")
+            print(f"\nRun {run+1}")
 
-    # Store sizes
-    train_sizes.append(len(train_small))
-    val_sizes.append(len(val_small) + len(val_large))
-    test_sizes.append(len(test_small) + len(test_large))
+            small_graphs = [
+                d for d in filtered_dataset
+                if d.num_nodes <= 40
+            ]
 
-    # -------- LOADERS --------
-    train_loader = DataLoader(train_small, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=64)
-    test_small_loader = DataLoader(test_small, batch_size=64)
-    test_large_loader = DataLoader(test_large, batch_size=64)
+            large_graphs = [
+                d for d in filtered_dataset
+                if d.num_nodes > 40
+            ]
 
-    # -------- MODEL --------
-    model = RobustGNN(hidden_channels=128).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    criterion = torch.nn.BCEWithLogitsLoss()
+            random.shuffle(small_graphs)
+            random.shuffle(large_graphs)
 
-    # -------- TRAIN LOOP --------
-    best_val_acc = 0
-    best_state = None
-    patience = 20
-    trigger = 0
+            # Small graph:0.6 train, 0.2 val, 0.2 test
+            n_small = len(small_graphs)
 
-    for epoch in range(1, 151):
-        train(model, train_loader, optimizer, criterion)
-        val_acc = test(model, val_loader)
+            train_small = small_graphs[
+                :int(0.6 * n_small)
+            ]
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_state = copy.deepcopy(model.state_dict())
+            val_small = small_graphs[
+                int(0.6 * n_small):
+                int(0.8 * n_small)
+            ]
+
+            test_small = small_graphs[
+                int(0.8 * n_small):
+            ]
+
+            # Large split: 
+            # 20% VALIDATION
+            # 80% TEST
+            n_large = len(large_graphs)
+
+            val_large = large_graphs[
+                :int(0.2 * n_large)
+            ]
+
+            test_large = large_graphs[
+                int(0.2 * n_large):
+            ]
+
+            # Validation contains:
+            # small validation + large validation
+            val_data = val_small + val_large
+
+            train_loader = DataLoader(
+                train_small,
+                batch_size=64,
+                shuffle=True
+            )
+
+            val_loader = DataLoader(
+                val_data,
+                batch_size=64
+            )
+
+            test_large_loader = DataLoader(
+                test_large,
+                batch_size=64
+            )
+
+            print("\n--- DATA SPLITS ---")
+
+            print(
+                f"Train Small: {len(train_small)}"
+            )
+
+            print(
+                f"Validation Small: {len(val_small)}"
+            )
+
+            print(
+                f"Validation Large: {len(val_large)}"
+            )
+
+            print(
+                f"Test Small: {len(test_small)}"
+            )
+
+            print(
+                f"Test Large: {len(test_large)}"
+            )
+
+            model = RobustGNN(
+                hidden_channels=128,
+                pooling=pooling,
+                activation=activation
+            ).to(device)
+
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=0.001
+            )
+
+            criterion = torch.nn.BCEWithLogitsLoss()
+
+            # Train
+            best_val_acc = 0
+            best_state = None
+            best_loss = 999999
+            patience = 20
             trigger = 0
-        else:
-            trigger += 1
 
-        if epoch % 10 == 0:
-            print(f"Epoch {epoch:03d}, Val Acc: {val_acc:.4f}")
+            for epoch in range(1, 151):
 
-        if trigger >= patience:
-            print(f"Early stopping at epoch {epoch}")
-            break
+                loss = train(
+                    model,
+                    train_loader,
+                    optimizer,
+                    criterion
+                )
 
-    # -------- FINAL TEST --------
-    model.load_state_dict(best_state)
+                val_acc, _, _, _ = evaluate(
+                    model,
+                    val_loader
+                )
 
-    small_acc = test(model, test_small_loader)
-    large_acc = test(model, test_large_loader)
+                # Early stopping
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_state = copy.deepcopy(
+                        model.state_dict()
+                    )
+                    trigger = 0
+                else:
+                    trigger += 1
 
-    small_accs.append(small_acc)
-    large_accs.append(large_acc)
+                if loss < best_loss:
+                    best_loss = loss
 
-    print(f"Run {run+1} Small Test Acc: {small_acc:.4f}")
-    print(f"Run {run+1} Large Test Acc: {large_acc:.4f}")
+                if epoch % 10 == 0:
+                    print(
+                        f"Epoch {epoch:03d}, "
+                        f"Loss: {loss:.4f}, "
+                        f"Val Acc: {val_acc:.4f}"
+                    )
 
-# =========================
-# FINAL RESULTS
-# =========================
-avg_small = sum(small_accs) / NUM_RUNS
-avg_large = sum(large_accs) / NUM_RUNS
+                if trigger >= patience:
+                    print(
+                        f"Early stopping at epoch {epoch}"
+                    )
+                    break
+            
+            #Test
+            model.load_state_dict(best_state)
+            large_acc, precision, recall, f1 = evaluate(
+                model,
+                test_large_loader
+            )
 
-print("\n==================================================")
-print("Dataset: Tox21 (SR-MMP)")
-print("==================================================\n")
+            # Stire results
+            run_val_accs.append(best_val_acc)
+            run_large_accs.append(large_acc)
+            run_losses.append(best_loss)
+            run_precisions.append(precision)
+            run_recalls.append(recall)
+            run_f1s.append(f1)
 
-print("Strategy")
-print("Custom Split + 5 Runs (Average)\n")
+            print("\n--- RUN RESULTS ---")
+            print(
+                f"Best Val Acc: {best_val_acc:.4f}"
+            )
+            print(
+                f"Challenge Acc: {large_acc:.4f}"
+            )
+            print(
+                f"Min Loss: {best_loss:.4f}"
+            )
+            print(
+                f"Precision: {precision:.4f}"
+            )
+            print(
+                f"Recall: {recall:.4f}"
+            )
+            print(
+                f"F1 Score: {f1:.4f}"
+            )
 
-print(f"Average Small Graph Accuracy: {avg_small*100:.2f}%")
-print(f"Average Large Graph Accuracy: {avg_large*100:.2f}%\n")
+        # Average over results
+        results.append({
+            "Model": "gcn",
+            "Pooling": pooling,
+            "Activation": activation,
+            "Best Val Acc":
+                round(
+                    sum(run_val_accs) / NUM_RUNS,
+                    4
+                ),
+            "Challenge Acc":
+                round(
+                    sum(run_large_accs) / NUM_RUNS,
+                    4
+                ),
+            "Min Loss":
+                round(
+                    sum(run_losses) / NUM_RUNS,
+                    4
+                ),
+            "Precision":
+                round(
+                    sum(run_precisions) / NUM_RUNS,
+                    4
+                ),
+            "Recall":
+                round(
+                    sum(run_recalls) / NUM_RUNS,
+                    4
+                ),
+            "F1 Score":
+                round(
+                    sum(run_f1s) / NUM_RUNS,
+                    4
+                )
+        })
 
-print("Average Data Sizes:")
-print(f"Train: {sum(train_sizes)/NUM_RUNS:.1f}")
-print(f"Validation: {sum(val_sizes)/NUM_RUNS:.1f}")
-print(f"Test: {sum(test_sizes)/NUM_RUNS:.1f}")
 
-print("\nKey Takeaway:")
-if avg_large > avg_small:
-    print("Model generalizes well to large graphs.")
-else:
-    print("Model struggles to generalize to large graphs.")
+print("Final Table")
+
+header = (
+    f"{'Model':<10}"
+    f"{'Pooling':<10}"
+    f"{'Activation':<15}"
+    f"{'Best Val Acc':<15}"
+    f"{'Challenge Acc':<18}"
+    f"{'Min Loss':<12}"
+    f"{'Precision':<12}"
+    f"{'Recall':<10}"
+    f"{'F1 Score':<10}"
+)
+
+print(header)
+print("-" * len(header))
+
+for r in results:
+    print(
+        f"{r['Model']:<10}"
+        f"{r['Pooling']:<10}"
+        f"{r['Activation']:<15}"
+        f"{r['Best Val Acc']:<15}"
+        f"{r['Challenge Acc']:<18}"
+        f"{r['Min Loss']:<12}"
+        f"{r['Precision']:<12}"
+        f"{r['Recall']:<10}"
+        f"{r['F1 Score']:<10}"
+    )
+
+# Save on txt file
+with open(
+    "tox21_results_table.txt",
+    "w"
+) as f:
+    f.write(header + "\n")
+    f.write(
+        "-" * len(header) + "\n"
+    )
+    for r in results:
+        line = (
+            f"{r['Model']:<10}"
+            f"{r['Pooling']:<10}"
+            f"{r['Activation']:<15}"
+            f"{r['Best Val Acc']:<15}"
+            f"{r['Challenge Acc']:<18}"
+            f"{r['Min Loss']:<12}"
+            f"{r['Precision']:<12}"
+            f"{r['Recall']:<10}"
+            f"{r['F1 Score']:<10}"
+        )
+        f.write(line + "\n")
+
+print("\nResults saved as tox21_results_table.txt")
