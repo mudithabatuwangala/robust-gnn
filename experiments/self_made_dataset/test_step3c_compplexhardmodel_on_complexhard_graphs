@@ -1,0 +1,137 @@
+import torch
+import networkx as nx
+import os
+import numpy as np
+import random
+from torch_geometric.data import Data, DataLoader
+from torch_geometric.nn import GCNConv, global_max_pool 
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# OMP Fix
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# --- CONFIGURATION ---
+GLOBAL_SEED = 64  
+NUM_TRIALS = 5    
+SAMPLES = 300     
+# ---------------------
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+class RobustGNN(torch.nn.Module):
+    def __init__(self, hidden_channels):
+        super(RobustGNN, self).__init__()
+        self.conv1 = GCNConv(3, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, hidden_channels)
+        self.conv4 = GCNConv(hidden_channels, hidden_channels)
+        self.conv5 = GCNConv(hidden_channels, hidden_channels)
+        self.lin = torch.nn.Linear(hidden_channels, 2)
+
+    def forward(self, x, edge_index, batch):
+        x = self.conv1(x, edge_index).relu()
+        x = self.conv2(x, edge_index).relu()
+        x = self.conv3(x, edge_index).relu()
+        x = self.conv4(x, edge_index).relu()
+        x = self.conv5(x, edge_index).relu()
+        x = global_max_pool(x, batch) 
+        return self.lin(x)
+
+def generate_hard_complex_sample(num_nodes, graph_type, param):
+    if graph_type == 'ER':
+        G = nx.erdos_renyi_graph(num_nodes, param)
+    else:
+        m_val = max(1, int(param))
+        G = nx.barabasi_albert_graph(num_nodes, m_val)
+
+    # Initialize nodes: Column 0 is Blue (Standard), 1 is Red, 2 is Green
+    x = torch.zeros((num_nodes, 3)); x[:, 0] = 1 
+    nodes = list(G.nodes())
+    random.shuffle(nodes)
+    u, v = nodes[0], nodes[1] # Red and Green
+    x[u] = torch.tensor([0, 1, 0]); x[v] = torch.tensor([0, 0, 1]) 
+
+    is_positive = np.random.rand() > 0.5
+
+    if is_positive:
+        # --- POSITIVE: STRICT 2-HOP (R-B-G) ---
+        w = nodes[2]
+        G.add_edge(u, w)
+        G.add_edge(w, v)
+        # Clean shortcuts: No direct R-G edge and ONLY one B bridge
+        if G.has_edge(u, v): G.remove_edge(u, v)
+        for c in list(nx.common_neighbors(G, u, v)):
+            if c != w:
+                if G.has_edge(u, c): G.remove_edge(u, c)
+                if G.has_edge(v, c): G.remove_edge(v, c)
+        y = 1
+    else:
+        # --- NEGATIVE: HARD (R-B-B-G) OR SIMPLE ---
+        if np.random.rand() > 0.5:
+            # Hard Negative: 3-hop path exists
+            w1, w2 = nodes[2], nodes[3]
+            G.add_edge(u, w1)
+            G.add_edge(w1, w2)
+            G.add_edge(w2, v)
+        
+        # Ensure NO 2-hop bridge exists in negative samples
+        if G.has_edge(u, v): G.remove_edge(u, v)
+        for c in list(nx.common_neighbors(G, u, v)):
+            if G.has_edge(u, c): G.remove_edge(u, c)
+            if G.has_edge(v, c): G.remove_edge(v, c)
+        y = 0
+
+    edge_index = torch.tensor(list(G.edges)).t().contiguous()
+    if edge_index.numel() > 0:
+        edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+    return Data(x=x, edge_index=edge_index, y=torch.tensor([y]))
+
+def run_test():
+    set_seed(GLOBAL_SEED)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Path to your step 3 robust model
+    model_path = r"experiments\self_made_dataset\step3_trained_model.pt"
+    
+    if not os.path.exists(model_path):
+        print(f"Error: {model_path} not found!")
+        return
+
+    model = RobustGNN(128).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    p_values = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
+    m_values = [1, 2, 3, 5, 10]
+    
+    print(f"--- HARD STRESS TEST (100 NODES | R-B-B-G NEGATIVES) ---")
+    print(f"Using Seed: {GLOBAL_SEED}")
+    
+    for label, sweep_type, vals in [("ER Density Sweep", "ER", p_values), ("BA Connectivity Sweep", "BA", m_values)]:
+        print(f"\nResults for {label}:")
+        print("-" * 60)
+        for val in vals:
+            trial_accs = []
+            for _ in range(NUM_TRIALS):
+                samples = [generate_hard_complex_sample(100, sweep_type, val) for _ in range(SAMPLES)]
+                loader = DataLoader(samples, batch_size=32)
+                correct = 0
+                for data in loader:
+                    data = data.to(device)
+                    with torch.no_grad():
+                        out = model(data.x, data.edge_index, data.batch)
+                        pred = out.argmax(dim=1)
+                        correct += int((pred == data.y).sum())
+                trial_accs.append((correct / SAMPLES) * 100)
+            
+            print(f"{sweep_type} {val:<5} | Mean Accuracy: {np.mean(trial_accs):.2f}% | Std: {np.std(trial_accs):.2f}%")
+
+if __name__ == "__main__":
+    run_test()
