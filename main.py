@@ -1,46 +1,81 @@
-import torch
-import networkx as nx
-import matplotlib.pyplot as plt
-from torch_geometric.data import Data
-from torch_geometric.utils import to_networkx
-from torch_geometric.nn import GCNConv
+import argparse
+import yaml
+import argparse
+import yaml
+import itertools
+import copy
+from src.runner.repeat_runner import run_multiple_times
+from src.runner.experiment_runner import execute
+from src.utils.result_collector import collect_results
+from src.utils.summary_table import build_table
+from src.utils.advanced_plotting import plot_dataset_results
+from src.utils.save_results import save_or_update_results
 
-# 1. Define the connections (edges)
-# Node 0 -> 1, 1 -> 0, 1 -> 2, 2 -> 1 (nodes: 0, 1, 2)
-edge_index = torch.tensor([[0, 1, 1, 2],
-                           [1, 0, 2, 1]], dtype=torch.long)
 
-# 2. Define node features (3 nodes, each with 1 feature)
-x = torch.tensor([[-1], [0], [1]], dtype=torch.float)
+def load_yaml(path):
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
 
-# 3. Create the Graph Data object
-data = Data(x=x, edge_index=edge_index)
 
-print("--- PyTorch Geometric Success! ---")
-print(f"Graph summary: {data}")
-print(f"Number of nodes: {data.num_nodes}")
-print(f"Number of edges: {data.num_edges}")
+def merge_configs(defaults, override):
+    config = defaults.copy()
+    config.update(override)
+    return config
 
-# ---------------------------------------------------------
 
-# Initialize the layer
-# Imput features of graph = 1 (x has 1 col)
-# Output features = 2 (srbitrary)
-conv = GCNConv(in_channels=1, out_channels=2)
+def generate_configs(config):
+    keys = []
+    values = []
 
-# Pass the dat through the GCN layer
-# We need both features x and the structure (edge_index)
-output = conv(data.x, data.edge_index)
+    for k, v in config.items():
+        if isinstance(v, list):
+            keys.append(k)
+            values.append(v)
 
-print("Output features after one GCN layer:")
-print(output)
+    if not keys:
+        return [config]
 
-# ---------------------------------------------------------
+    combinations = list(itertools.product(*values))
+    configs = []
 
-# Convert the PyG data object into NetworkX
-G = to_networkx(data, to_undirected=True) 
+    for combo in combinations:
+        new_config = copy.deepcopy(config)
+        for i, key in enumerate(keys):
+            new_config[key] = combo[i]
+        configs.append(new_config)
 
-# Draw the graph G
-plt.figure(figsize=(4, 4))
-nx.draw(G, with_labels=True, node_color='skyblue', node_size=800, font_weight='bold')
-plt.show()
+    return configs
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True)
+    args = parser.parse_args()
+
+    # Load configs
+    global_config = load_yaml("configs/defaults/global.yaml")
+    exp_config = load_yaml(args.config)
+    merged_config = merge_configs(global_config, exp_config)
+    configs = generate_configs(merged_config)
+
+    print(f"\nRunning {len(configs)} experiment configs...\n")
+
+    all_runs = []
+    # Run experiments
+    for i, cfg in enumerate(configs):
+
+        print(f"\n===== Experiment {i+1}/{len(configs)} =====")
+        print(cfg)
+
+        run_results = run_multiple_times(execute, cfg, num_runs=5)
+
+        # store all runs with config
+        for r in run_results:
+            all_runs.append((cfg, r))
+
+    grouped = collect_results(all_runs, cfg["experiment_type"])
+    df = build_table(grouped, cfg["experiment_type"])
+    path = "results/" + str(cfg["experiment_type"]) + "_experiment.csv"
+    save_or_update_results(df, path)
+
+    print("\nSaved summary table to " + path)
